@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt httpx
+
+      - name: Run unit and API compatibility tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Compile Python sources
+        run: python -m py_compile api_server.py diarizer.py
+
+      - name: Check shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          shellcheck run.sh manage.sh
+
+      - name: Validate Compose configurations
+        env:
+          WHISPER_API_KEY: ci-test-key
+        run: |
+          docker compose -f compose.yml config --quiet
+          docker compose -f compose.gpu-reservation.yml config --quiet
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build CPU image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: whisper-not:test
+          cache-from: type=gha,scope=cpu
+          cache-to: type=gha,mode=max,scope=cpu
+
+      - name: Validate CUDA Dockerfile
+        run: docker build --check --file Dockerfile.cuda .

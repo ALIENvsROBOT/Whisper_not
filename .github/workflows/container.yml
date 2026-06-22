@@ -1,0 +1,100 @@
+name: Publish containers
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY_IMAGE: ghcr.io/alienvsrobot/whisper_not
+  AUTO_VERSION: 0.1.${{ github.run_number }}
+
+jobs:
+  publish-cpu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate CPU image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ env.AUTO_VERSION }},enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and publish CPU image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VERSION=${{ env.AUTO_VERSION }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=cpu-publish
+          cache-to: type=gha,mode=max,scope=cpu-publish
+
+  publish-cuda:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate CUDA image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=cuda,enable={{is_default_branch}}
+            type=raw,value=cuda-${{ env.AUTO_VERSION }},enable={{is_default_branch}}
+            type=sha,prefix=cuda-sha-
+            type=semver,pattern=cuda-{{version}}
+            type=semver,pattern=cuda-{{major}}.{{minor}}
+
+      - name: Build and publish CUDA image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cuda
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VERSION=cuda-${{ env.AUTO_VERSION }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=cuda-publish
+          cache-to: type=gha,mode=max,scope=cuda-publish
