@@ -244,6 +244,7 @@ in the container’s temporary filesystem while the request is processed.
 | `WHISPER_WORD_TIMESTAMPS` | `false` | Global word timestamps; per-request is recommended |
 | `WHISPER_API_KEY` | Generated for new persistent volumes | Bearer-token authentication |
 | `HF_TOKEN` | Empty | Hugging Face token for gated/private models |
+| `WHISPER_STARTUP_TIMEOUT` | `3600` | Seconds allowed for initial model download and loading |
 
 ## Container images and versions
 

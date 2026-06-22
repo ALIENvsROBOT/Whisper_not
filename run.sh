@@ -68,6 +68,8 @@ WHISPER_DIARIZE_NUM_SPEAKERS=$(nospaces "$WHISPER_DIARIZE_NUM_SPEAKERS")
 WHISPER_DIARIZE_NUM_SPEAKERS=$(noquotes "$WHISPER_DIARIZE_NUM_SPEAKERS")
 WHISPER_DIARIZE_THRESHOLD=$(nospaces "$WHISPER_DIARIZE_THRESHOLD")
 WHISPER_DIARIZE_THRESHOLD=$(noquotes "$WHISPER_DIARIZE_THRESHOLD")
+WHISPER_STARTUP_TIMEOUT=$(nospaces "$WHISPER_STARTUP_TIMEOUT")
+WHISPER_STARTUP_TIMEOUT=$(noquotes "$WHISPER_STARTUP_TIMEOUT")
 HF_TOKEN=$(nospaces "$HF_TOKEN")
 HF_TOKEN=$(noquotes "$HF_TOKEN")
 
@@ -88,6 +90,7 @@ _USER_COMPUTE_TYPE="$WHISPER_COMPUTE_TYPE"
 [ -z "$WHISPER_DIARIZATION" ] && WHISPER_DIARIZATION=on_demand
 [ -z "$WHISPER_DIARIZE_NUM_SPEAKERS" ] && WHISPER_DIARIZE_NUM_SPEAKERS=-1
 [ -z "$WHISPER_DIARIZE_THRESHOLD" ]    && WHISPER_DIARIZE_THRESHOLD=0.5
+[ -z "$WHISPER_STARTUP_TIMEOUT" ] && WHISPER_STARTUP_TIMEOUT=3600
 
 # Validate port
 if ! check_port "$WHISPER_PORT"; then
@@ -144,6 +147,10 @@ fi
 # Validate maximum upload size in MB (0 disables the limit)
 if ! printf '%s' "$WHISPER_MAX_UPLOAD_MB" | grep -Eq '^(0|[1-9][0-9]*)$'; then
   exiterr "WHISPER_MAX_UPLOAD_MB must be 0 (unlimited) or a positive integer."
+fi
+
+if ! printf '%s' "$WHISPER_STARTUP_TIMEOUT" | grep -Eq '^[1-9][0-9]*$'; then
+  exiterr "WHISPER_STARTUP_TIMEOUT must be a positive number of seconds."
 fi
 
 # Validate diarization speaker counts (-1 for auto-detect, or a positive integer)
@@ -219,6 +226,7 @@ export WHISPER_WORD_TIMESTAMPS
 export WHISPER_DIARIZATION
 export WHISPER_DIARIZE_NUM_SPEAKERS
 export WHISPER_DIARIZE_THRESHOLD
+export WHISPER_STARTUP_TIMEOUT
 export HF_TOKEN
 # Point faster-whisper / HuggingFace Hub at the persistent Docker volume
 export HF_HOME=/var/lib/whisper
@@ -254,6 +262,7 @@ echo "  Device:   $WHISPER_DEVICE ($WHISPER_COMPUTE_TYPE)"
 echo "  Language: $WHISPER_LANGUAGE"
 echo "  Port:     $WHISPER_PORT"
 echo "  Beam:     $WHISPER_BEAM"
+echo "  Startup:  ${WHISPER_STARTUP_TIMEOUT}s timeout"
 if [ -n "$WHISPER_LOCAL_ONLY" ]; then
   echo "  Mode:     local-only (no HuggingFace downloads)"
 fi
@@ -299,11 +308,11 @@ cd /opt/src && python3 /opt/src/api_server.py &
 WHISPER_PID=$!
 
 # Wait for the server to become ready.
-# Allow up to 300 seconds — first-run model download can take several minutes
-# on a slow connection even for the base model (~145 MB).
+# Large models can take a long time to download on slow links. The timeout is
+# configurable and defaults to one hour.
 wait_for_server() {
   local i=0
-  while [ "$i" -lt 300 ]; do
+  while [ "$i" -lt "$WHISPER_STARTUP_TIMEOUT" ]; do
     if ! kill -0 "$WHISPER_PID" 2>/dev/null; then
       return 1
     fi
@@ -320,7 +329,7 @@ if ! wait_for_server; then
   if ! kill -0 "$WHISPER_PID" 2>/dev/null; then
     echo "Error: Whisper server failed to start. Check the container logs for details." >&2
   else
-    echo "Error: Whisper server did not become ready within 300 seconds." >&2
+    echo "Error: Whisper server did not become ready within ${WHISPER_STARTUP_TIMEOUT} seconds." >&2
     kill "$WHISPER_PID" 2>/dev/null
   fi
   exit 1

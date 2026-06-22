@@ -21,6 +21,7 @@ services:
       WHISPER_DIARIZATION: ${WHISPER_DIARIZATION:-on_demand}
       WHISPER_WORD_TIMESTAMPS: "false"
       WHISPER_MAX_UPLOAD_MB: ${WHISPER_MAX_UPLOAD_MB:-1024}
+      WHISPER_STARTUP_TIMEOUT: ${WHISPER_STARTUP_TIMEOUT:-3600}
       WHISPER_LOG_LEVEL: ${WHISPER_LOG_LEVEL:-INFO}
       HF_TOKEN: ${HF_TOKEN:-}
     ports:
@@ -34,7 +35,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10m
+      start_period: 1h
 
 volumes:
   whisper-not-data:

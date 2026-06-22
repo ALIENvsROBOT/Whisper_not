@@ -101,6 +101,7 @@ Hugging Face CTranslate2 model:
 ```env
 WHISPER_MODEL=TheChola/whisper-large-v3-turbo-german-faster-whisper
 HF_TOKEN=hf_replace_with_your_token
+WHISPER_STARTUP_TIMEOUT=3600
 ```
 
 Mounted local model:
