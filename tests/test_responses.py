@@ -2,7 +2,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-import api_server
+from whisper_not import api as api_server
 
 
 def _segment(index, start, end, text):

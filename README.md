@@ -63,9 +63,10 @@ Set it through Compose/Portainer, `--env-file .env`, or directly:
 
 ## Portainer GPU stack
 
-Use [compose.yml](compose.yml) on a CDI-configured Linux host. On Windows
+Use [deploy/compose.cuda-cdi.yml](deploy/compose.cuda-cdi.yml) on a
+CDI-configured Linux host. On Windows
 Docker Desktop, use
-[compose.gpu-reservation.yml](compose.gpu-reservation.yml), which was verified
+[deploy/compose.cuda.yml](deploy/compose.cuda.yml), which was verified
 with this project’s local CUDA test.
 
 Set these Portainer environment variables:
@@ -93,8 +94,8 @@ docker run --device nvidia.com/gpu=all ...
 ```
 
 If an Ubuntu Docker installation does not expose CDI devices, use
-[compose.gpu-reservation.yml](compose.gpu-reservation.yml), which uses the
-standard NVIDIA Compose reservation.
+[deploy/compose.cuda.yml](deploy/compose.cuda.yml), which uses the standard
+NVIDIA Compose reservation.
 
 For a rootful Ubuntu Podman deployment using
 `sudo podman --device=nvidia.com/gpu=all`, follow
@@ -210,8 +211,11 @@ curl "$BASE_URL/audio/transcriptions" \
   -F file=@meeting.mp3 \
   -F model=gpt-4o-transcribe-diarize \
   -F response_format=diarized_json \
-  -F num_speakers=2
+  -F num_speakers=4
 ```
+
+Omit `num_speakers` for automatic multi-speaker detection. Diarization is not
+limited to two participants.
 
 Download SRT:
 
@@ -241,6 +245,8 @@ in the container’s temporary filesystem while the request is processed.
 | `WHISPER_BEAM` | `5` | Decoding beam size |
 | `WHISPER_THREADS` | `2` | CPU inference threads |
 | `WHISPER_DIARIZATION` | `on_demand` | `on_demand`, `always`, or `disabled` |
+| `WHISPER_DIARIZATION_DEVICE` | `auto` | `auto`, `cuda`, or `cpu`; auto follows the Whisper device |
+| `WHISPER_DIARIZATION_THREADS` | `2` | ONNX Runtime threads for diarization |
 | `WHISPER_WORD_TIMESTAMPS` | `false` | Global word timestamps; per-request is recommended |
 | `WHISPER_API_KEY` | Generated for new persistent volumes | Bearer-token authentication |
 | `HF_TOKEN` | Empty | Hugging Face token for gated/private models |
@@ -276,6 +282,11 @@ and `cuda-1.2`.
 - Set an exact `num_speakers` when known for more reliable clustering.
 - A single process intentionally serializes CTranslate2 inference to avoid
   unsafe concurrent access and unpredictable GPU memory spikes.
+
+The CUDA image installs the official sherpa-onnx CUDA 12/cuDNN 9 wheel.
+Diarization segmentation and speaker-embedding inference use CUDA when
+`WHISPER_DIARIZATION_DEVICE=auto` and `WHISPER_DEVICE=cuda`. Clustering and
+pipeline coordination still perform some CPU work.
 
 ## Documentation
 

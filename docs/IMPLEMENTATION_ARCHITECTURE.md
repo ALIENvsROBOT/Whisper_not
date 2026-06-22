@@ -13,7 +13,7 @@ to a direct faster-whisper transcription.
 
 ## Components
 
-### `api_server.py`
+### `src/whisper_not/api.py`
 
 Owns:
 
@@ -28,7 +28,7 @@ Owns:
 
 The Whisper model is created once during application startup.
 
-### `diarizer.py`
+### `src/whisper_not/diarization.py`
 
 Owns:
 
@@ -41,7 +41,11 @@ Owns:
 It uses ONNX Runtime and does not require PyTorch or a pyannote Hugging Face
 token.
 
-### `run.sh`
+The CUDA image installs sherpa-onnx’s CUDA 12/cuDNN 9 wheel. The segmentation
+and speaker-embedding model configurations both receive `provider="cuda"`
+when CUDA is selected. Clustering and orchestration can still consume CPU.
+
+### `scripts/container-entrypoint.sh`
 
 Owns:
 
@@ -56,7 +60,7 @@ Owns:
 It accepts built-in faster-whisper names, Hugging Face CTranslate2 repository
 IDs, and container-local model paths.
 
-### `manage.sh`
+### `scripts/whisper-manage.sh`
 
 Provides operational commands for:
 
@@ -112,6 +116,12 @@ Diarization:
 3. In `on_demand` mode, `diarize=true`, `diarized_json`, or
    `gpt-4o-transcribe-diarize` activates diarization.
 4. Otherwise diarization remains off.
+
+Speaker clustering is not capped at two speakers. A positive
+`num_speakers` sets an exact cluster count; `-1` enables threshold-based
+automatic detection. CUDA diarization pipelines are initialized before
+CTranslate2 processes a diarized request because initializing sherpa-onnx
+after CUDA transcription can fail inside the native runtime.
 
 Language:
 

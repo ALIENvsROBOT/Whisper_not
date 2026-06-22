@@ -23,6 +23,8 @@ import uvicorn
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
+from whisper_not import diarization
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -251,7 +253,8 @@ def _env_int(name: str, default: int) -> int:
     """Read an integer env var, falling back to ``default`` when unset or empty.
 
     ``os.environ.get(name, default)`` only applies the default when the variable
-    is absent. Because run.sh exports config variables unconditionally, an unset
+    is absent. Because the container entrypoint exports config variables
+    unconditionally, an unset
     option arrives as an empty string, which would otherwise raise ValueError in
     int(). Treat empty/whitespace values as "use the default".
     """
@@ -548,7 +551,7 @@ async def _stream_sse(
 
 @app.get("/health", include_in_schema=False)
 async def health():
-    """Container liveness probe — used by run.sh to detect startup completion."""
+    """Container liveness probe used to detect startup completion."""
     return {"status": "ok", "model": _model_name}
 
 
@@ -698,6 +701,35 @@ async def _handle_audio(
     # Batch path
     # ------------------------------------------------------------------
     try:
+        diarization_provider = None
+        diarization_threads = None
+        if options.diarize:
+            try:
+                with _diarization_lock:
+                    diarization_provider = diarization.resolve_provider(
+                        os.environ.get("WHISPER_DIARIZATION_DEVICE", "auto"),
+                        whisper_device=os.environ.get("WHISPER_DEVICE", "cpu"),
+                    )
+                    diarization_threads = _env_int(
+                        "WHISPER_DIARIZATION_THREADS",
+                        2,
+                    )
+                    # The CUDA sherpa-onnx pipeline must be initialized before
+                    # CTranslate2 processes audio in the same process.
+                    diarization.load(
+                        cache_dir=os.environ.get("HF_HOME", "/var/lib/whisper"),
+                        num_speakers=options.num_speakers,
+                        cluster_threshold=options.diarize_threshold,
+                        provider=diarization_provider,
+                        num_threads=diarization_threads,
+                    )
+            except Exception as exc:
+                logger.exception("Diarization initialization failed: %s", exc)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Speaker diarization initialization failed: {exc}",
+                ) from exc
+
         try:
             with _inference_lock:
                 segments_gen, info = _model.transcribe(
@@ -724,20 +756,21 @@ async def _handle_audio(
         speaker_map = None  # {segment_index: speaker_label}
         if options.diarize:
             try:
-                import diarizer
                 with _diarization_lock:
-                    turns = diarizer.diarize(
+                    turns = diarization.diarize(
                         tmp_path,
                         cache_dir=os.environ.get("HF_HOME", "/var/lib/whisper"),
                         num_speakers=options.num_speakers,
                         cluster_threshold=options.diarize_threshold,
+                        provider=diarization_provider,
+                        num_threads=diarization_threads,
                     )
                 # Build lightweight segment dicts for alignment
                 seg_dicts = [
                     {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
                     for seg in segments
                 ]
-                diarizer.assign_speakers(seg_dicts, turns)
+                diarization.assign_speakers(seg_dicts, turns)
                 speaker_map = {i: d["speaker"] for i, d in enumerate(seg_dicts)}
             except Exception as exc:
                 logger.exception("Diarization failed: %s", exc)
@@ -1037,13 +1070,13 @@ async def translate(
 
 
 # ---------------------------------------------------------------------------
-# Entry point (used by run.sh: python3 /opt/src/api_server.py)
+# Module entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     port = _env_int("WHISPER_PORT", 9000)
     uvicorn.run(
-        "api_server:app",
+        "whisper_not.api:app",
         host="0.0.0.0",
         port=port,
         log_level=_log_level_str.lower(),

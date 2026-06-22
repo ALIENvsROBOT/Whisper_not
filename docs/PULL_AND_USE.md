@@ -119,7 +119,7 @@ usage.
 
 ## Use an environment file
 
-Copy `.env.example` to `.env`, set the API key, token, and model, then use:
+Copy `deploy/env.example` to `.env`, set the API key, token, and model, then use:
 
 ```bash
 docker run --env-file .env ...
@@ -134,7 +134,7 @@ sudo podman run --env-file .env ...
 Docker Compose automatically reads `.env` for `${VARIABLE}` substitution:
 
 ```bash
-docker compose -f compose.gpu-reservation.yml up -d
+docker compose -f deploy/compose.cuda.yml up -d
 ```
 
 The container startup script also supports a bind-mounted shell environment

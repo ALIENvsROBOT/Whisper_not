@@ -5,7 +5,7 @@
 # DO NOT RUN THIS SCRIPT ON YOUR PC OR MAC! THIS IS ONLY MEANT TO BE RUN
 # IN A CONTAINER!
 #
-# Fork source: https://github.com/ALIENvsROBOT/Whisper_not
+# Project: https://github.com/ALIENvsROBOT/Whisper_not
 #
 export PATH="/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -68,6 +68,10 @@ WHISPER_DIARIZE_NUM_SPEAKERS=$(nospaces "$WHISPER_DIARIZE_NUM_SPEAKERS")
 WHISPER_DIARIZE_NUM_SPEAKERS=$(noquotes "$WHISPER_DIARIZE_NUM_SPEAKERS")
 WHISPER_DIARIZE_THRESHOLD=$(nospaces "$WHISPER_DIARIZE_THRESHOLD")
 WHISPER_DIARIZE_THRESHOLD=$(noquotes "$WHISPER_DIARIZE_THRESHOLD")
+WHISPER_DIARIZATION_DEVICE=$(nospaces "$WHISPER_DIARIZATION_DEVICE")
+WHISPER_DIARIZATION_DEVICE=$(noquotes "$WHISPER_DIARIZATION_DEVICE")
+WHISPER_DIARIZATION_THREADS=$(nospaces "$WHISPER_DIARIZATION_THREADS")
+WHISPER_DIARIZATION_THREADS=$(noquotes "$WHISPER_DIARIZATION_THREADS")
 WHISPER_STARTUP_TIMEOUT=$(nospaces "$WHISPER_STARTUP_TIMEOUT")
 WHISPER_STARTUP_TIMEOUT=$(noquotes "$WHISPER_STARTUP_TIMEOUT")
 HF_TOKEN=$(nospaces "$HF_TOKEN")
@@ -90,6 +94,8 @@ _USER_COMPUTE_TYPE="$WHISPER_COMPUTE_TYPE"
 [ -z "$WHISPER_DIARIZATION" ] && WHISPER_DIARIZATION=on_demand
 [ -z "$WHISPER_DIARIZE_NUM_SPEAKERS" ] && WHISPER_DIARIZE_NUM_SPEAKERS=-1
 [ -z "$WHISPER_DIARIZE_THRESHOLD" ]    && WHISPER_DIARIZE_THRESHOLD=0.5
+[ -z "$WHISPER_DIARIZATION_DEVICE" ]   && WHISPER_DIARIZATION_DEVICE=auto
+[ -z "$WHISPER_DIARIZATION_THREADS" ]  && WHISPER_DIARIZATION_THREADS=2
 [ -z "$WHISPER_STARTUP_TIMEOUT" ] && WHISPER_STARTUP_TIMEOUT=3600
 
 # Validate port
@@ -163,6 +169,15 @@ if ! printf '%s' "$WHISPER_DIARIZE_THRESHOLD" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; 
   exiterr "WHISPER_DIARIZE_THRESHOLD must be a non-negative number (e.g. 0.5)."
 fi
 
+case "$WHISPER_DIARIZATION_DEVICE" in
+  auto|cpu|cuda) ;;
+  *) exiterr "WHISPER_DIARIZATION_DEVICE must be one of: auto, cpu, cuda." ;;
+esac
+
+if ! printf '%s' "$WHISPER_DIARIZATION_THREADS" | grep -Eq '^[1-9][0-9]*$'; then
+  exiterr "WHISPER_DIARIZATION_THREADS must be a positive integer."
+fi
+
 mkdir -p /var/lib/whisper
 # Create the dedicated temp directory for audio uploads.
 # TMPDIR is set to this path in the Dockerfile so that Python's tempfile module
@@ -226,6 +241,8 @@ export WHISPER_WORD_TIMESTAMPS
 export WHISPER_DIARIZATION
 export WHISPER_DIARIZE_NUM_SPEAKERS
 export WHISPER_DIARIZE_THRESHOLD
+export WHISPER_DIARIZATION_DEVICE
+export WHISPER_DIARIZATION_THREADS
 export WHISPER_STARTUP_TIMEOUT
 export HF_TOKEN
 # Point faster-whisper / HuggingFace Hub at the persistent Docker volume
@@ -267,6 +284,7 @@ if [ -n "$WHISPER_LOCAL_ONLY" ]; then
   echo "  Mode:     local-only (no HuggingFace downloads)"
 fi
 echo "  Diarize:  $WHISPER_DIARIZATION"
+echo "  Diarizer: $WHISPER_DIARIZATION_DEVICE"
 
 if [ -z "$WHISPER_LOCAL_ONLY" ]; then
   _model_in_cache() {
@@ -304,7 +322,7 @@ cleanup() {
 trap cleanup INT TERM
 
 # Start the FastAPI server in the background
-cd /opt/src && python3 /opt/src/api_server.py &
+cd /opt/src && python3 -m whisper_not.api &
 WHISPER_PID=$!
 
 # Wait for the server to become ready.

@@ -1,5 +1,5 @@
 *.sh text eol=lf
-Dockerfile text eol=lf
-Dockerfile.cuda text eol=lf
+docker/Dockerfile.cpu text eol=lf
+docker/Dockerfile.cuda text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf

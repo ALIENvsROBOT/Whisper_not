@@ -2,7 +2,7 @@ import unittest
 
 from fastapi import HTTPException
 
-import api_server
+from whisper_not import api as api_server
 
 
 class ResolveRequestOptionsTests(unittest.TestCase):

@@ -4,10 +4,10 @@
 
 The repository contains two GitHub Actions workflows:
 
-- `.github/workflows/ci.yml` validates source, API behavior, Compose files,
-  shell scripts, and the CPU container.
-- `.github/workflows/container.yml` builds and publishes CPU and CUDA images
-  to GitHub Container Registry.
+- `.github/workflows/ci.yml` validates source, API behavior, workflow syntax,
+  Compose files, shell scripts, and both container images.
+- `.github/workflows/container.yml` repeats the required validation gate,
+  then builds and publishes CPU and CUDA images to GitHub Container Registry.
 
 ## Required repository settings
 
@@ -17,8 +17,8 @@ In GitHub:
 2. Under **Workflow permissions**, select **Read and write permissions**.
 3. Keep **Allow GitHub Actions to create and approve pull requests** disabled;
    these workflows do not require it.
-4. Open **Settings → Actions → General → Fork pull request workflows** and use
-   the security policy appropriate for the repository.
+4. Retain the default untrusted pull-request security policy unless the
+   repository has a specific reason to change it.
 
 No registry password is required. Publishing uses the repository-scoped
 `GITHUB_TOKEN` with `packages: write`.
@@ -35,20 +35,25 @@ The `test` job:
 1. Uses Python 3.12.
 2. Installs pinned runtime dependencies plus `httpx`.
 3. Runs all unit and FastAPI compatibility tests.
-4. Compiles `api_server.py` and `diarizer.py`.
-5. Runs ShellCheck against `run.sh` and `manage.sh`.
-6. validates both Compose files.
+4. Compiles `src/whisper_not`.
+5. Runs ShellCheck against scripts under `scripts/`.
+6. Validates both Compose files.
+7. Validates both workflow files with `actionlint`.
 
 The `docker` job:
 
 1. Configures Docker Buildx.
 2. Builds the CPU image.
-3. validates the CUDA Dockerfile with Docker’s build check.
+3. Builds the CUDA image without running it.
 
 CUDA runtime execution is not attempted on GitHub-hosted runners because they
 do not provide an NVIDIA GPU.
 
 ## Container publishing workflow
+
+The publishing workflow first runs tests, source compilation, ShellCheck,
+Compose validation, and `actionlint`. CPU and CUDA publication jobs depend on
+that validation job, so no image is published when validation fails.
 
 Triggers:
 
@@ -165,12 +170,12 @@ docker run --rm --device nvidia.com/gpu=all \
 
 ### Dependency update
 
-Update one pinned package at a time in `requirements.txt`, then run:
+Update one pinned package at a time under `requirements/`, then run:
 
 ```bash
 python -m unittest discover -s tests -v
-docker build -t whisper-not:test -f Dockerfile .
-docker build -t whisper-not:cuda-test -f Dockerfile.cuda .
+docker build -t whisper-not:test -f docker/Dockerfile.cpu .
+docker build -t whisper-not:cuda-test -f docker/Dockerfile.cuda .
 ```
 
 Do not merge dependency updates based only on successful installation; retain

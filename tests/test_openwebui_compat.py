@@ -1,10 +1,9 @@
-import sys
 import unittest
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-import api_server
+from whisper_not import api as api_server
 
 
 class FakeModel:
@@ -42,7 +41,7 @@ class OpenWebUICompatibilityTests(unittest.TestCase):
         self.original_model = api_server._model
         self.original_model_name = api_server._model_name
         self.original_mode = api_server._diarization_mode
-        self.original_diarizer = sys.modules.get("diarizer")
+        self.original_diarizer = api_server.diarization
         self.model = FakeModel()
         api_server._model = self.model
         api_server._model_name = "test-model"
@@ -53,10 +52,7 @@ class OpenWebUICompatibilityTests(unittest.TestCase):
         api_server._model = self.original_model
         api_server._model_name = self.original_model_name
         api_server._diarization_mode = self.original_mode
-        if self.original_diarizer is None:
-            sys.modules.pop("diarizer", None)
-        else:
-            sys.modules["diarizer"] = self.original_diarizer
+        api_server.diarization = self.original_diarizer
 
     def test_openwebui_default_request_returns_plain_json_without_extra_work(self):
         response = self.client.post(
@@ -93,14 +89,27 @@ class OpenWebUICompatibilityTests(unittest.TestCase):
         self.assertEqual(response.json()["words"][0]["word"], "Hello")
 
     def test_direct_diarization_request_runs_local_diarizer(self):
+        call_order = []
         fake_diarizer = SimpleNamespace(
-            diarize=lambda *args, **kwargs: [(0.0, 1.0, "SPEAKER_00")],
+            load=lambda *args, **kwargs: call_order.append("diarizer_load"),
+            diarize=lambda *args, **kwargs: (
+                call_order.append("diarize")
+                or [(0.0, 1.0, "SPEAKER_00")]
+            ),
             assign_speakers=lambda segments, turns: [
                 segment.update({"speaker": "SPEAKER_00"}) or segment
                 for segment in segments
             ],
         )
-        sys.modules["diarizer"] = fake_diarizer
+        fake_diarizer.resolve_provider = lambda *args, **kwargs: "cpu"
+        api_server.diarization = fake_diarizer
+        original_transcribe = self.model.transcribe
+
+        def record_transcribe(*args, **kwargs):
+            call_order.append("transcribe")
+            return original_transcribe(*args, **kwargs)
+
+        self.model.transcribe = record_transcribe
 
         response = self.client.post(
             "/v1/audio/transcriptions",
@@ -115,6 +124,10 @@ class OpenWebUICompatibilityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["segments"][0]["speaker"], "A")
         self.assertIn("meeting.json", response.headers["content-disposition"])
+        self.assertEqual(
+            call_order,
+            ["diarizer_load", "transcribe", "diarize"],
+        )
 
 
 if __name__ == "__main__":

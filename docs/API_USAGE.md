@@ -83,13 +83,19 @@ curl http://localhost:9000/v1/audio/transcriptions \
   -F diarize=true
 ```
 
-Each segment receives a `speaker` field such as `SPEAKER_00`.
+Each segment receives a `speaker` field such as `SPEAKER_00`. The result is
+not limited to two speakers; automatic clustering can emit
+`SPEAKER_02`, `SPEAKER_03`, and additional labels as needed.
 
 When the exact speaker count is known:
 
 ```bash
--F num_speakers=2
+-F num_speakers=4
 ```
+
+Leave `num_speakers` unset for automatic detection. In automatic mode,
+`diarize_threshold` controls clustering: lower values generally produce more
+speaker clusters, while higher values produce fewer.
 
 ## OpenAI-style diarized JSON
 

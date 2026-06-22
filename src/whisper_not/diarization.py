@@ -13,7 +13,11 @@ import subprocess
 import tarfile
 
 import numpy as np
-import sherpa_onnx
+
+try:
+    import sherpa_onnx
+except ModuleNotFoundError:
+    sherpa_onnx = None
 
 logger = logging.getLogger("whisper_server.diarizer")
 
@@ -39,6 +43,18 @@ _EMB_MODEL_REL = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 # ---------------------------------------------------------------------------
 
 _pipelines = {}
+
+
+def resolve_provider(value: str = "auto", whisper_device: str = "cpu") -> str:
+    """Resolve the sherpa-onnx execution provider."""
+    requested = (value or "auto").strip().lower()
+    if requested == "auto":
+        return "cuda" if whisper_device.strip().lower() == "cuda" else "cpu"
+    if requested not in {"cpu", "cuda"}:
+        raise ValueError(
+            "WHISPER_DIARIZATION_DEVICE must be one of: auto, cpu, cuda."
+        )
+    return requested
 
 
 def _download_file(url: str, dest: str) -> None:
@@ -73,10 +89,14 @@ def load(
     cache_dir: str = "/var/lib/whisper",
     num_speakers: int = -1,
     cluster_threshold: float = 0.5,
+    provider: str = "cpu",
+    num_threads: int = 2,
 ) -> object:
     """Return a cached diarization pipeline for the requested clustering options."""
+    if sherpa_onnx is None:
+        raise RuntimeError("sherpa-onnx is not installed in this runtime.")
     cache_dir = os.path.abspath(cache_dir)
-    key = (cache_dir, num_speakers, cluster_threshold)
+    key = (cache_dir, num_speakers, cluster_threshold, provider, num_threads)
     if key in _pipelines:
         return _pipelines[key]
 
@@ -90,8 +110,14 @@ def load(
             pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
                 model=seg_path,
             ),
+            provider=provider,
+            num_threads=num_threads,
         ),
-        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=emb_path),
+        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+            model=emb_path,
+            provider=provider,
+            num_threads=num_threads,
+        ),
         clustering=sherpa_onnx.FastClusteringConfig(
             num_clusters=num_clusters,
             threshold=cluster_threshold,
@@ -108,7 +134,8 @@ def load(
     pipeline = sherpa_onnx.OfflineSpeakerDiarization(config)
     _pipelines[key] = pipeline
     logger.info(
-        "Diarization pipeline ready (sample_rate=%d, num_clusters=%d, threshold=%.2f)",
+        "Diarization pipeline ready (provider=%s, sample_rate=%d, num_clusters=%d, threshold=%.2f)",
+        provider,
         pipeline.sample_rate,
         num_clusters,
         cluster_threshold,
@@ -158,6 +185,8 @@ def diarize(
     cache_dir: str = "/var/lib/whisper",
     num_speakers: int = -1,
     cluster_threshold: float = 0.5,
+    provider: str = "cpu",
+    num_threads: int = 2,
 ):
     """
     Run diarization on an audio file.
@@ -168,6 +197,8 @@ def diarize(
         cache_dir=cache_dir,
         num_speakers=num_speakers,
         cluster_threshold=cluster_threshold,
+        provider=provider,
+        num_threads=num_threads,
     )
 
     audio = _load_audio(audio_path, target_sr=pipeline.sample_rate)

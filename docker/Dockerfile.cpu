@@ -4,36 +4,32 @@ WORKDIR /opt/src
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/opt/src" \
     PATH="/opt/venv/bin:$PATH" \
     TMPDIR="/run/whisper-temp"
 
-# faster-whisper decodes audio via the PyAV library (bundled FFmpeg libraries).
-# curl is used by run.sh for the public-IP lookup and the health-check poll.
-COPY ./requirements.txt /opt/src/requirements.txt
+COPY requirements/base.txt /opt/src/requirements.txt
 
-RUN set -x \
+RUN set -eux \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl bzip2 \
+    && apt-get install -y --no-install-recommends bzip2 curl \
     && python3 -m venv /opt/venv \
     && pip install --no-cache-dir --requirement /opt/src/requirements.txt \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
-    && find /opt/venv -name '*.pyi' -delete \
-    && { find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true; } \
     && mkdir -p /var/lib/whisper
 
-COPY ./run.sh /opt/src/run.sh
-COPY ./manage.sh /opt/src/manage.sh
-COPY ./api_server.py /opt/src/api_server.py
-COPY ./diarizer.py /opt/src/diarizer.py
-RUN chmod 755 /opt/src/run.sh /opt/src/manage.sh \
-    && ln -s /opt/src/manage.sh /usr/local/bin/whisper_manage
+COPY scripts/container-entrypoint.sh /opt/src/container-entrypoint.sh
+COPY scripts/whisper-manage.sh /opt/src/whisper-manage.sh
+COPY src/whisper_not /opt/src/whisper_not
+
+RUN chmod 755 /opt/src/container-entrypoint.sh /opt/src/whisper-manage.sh \
+    && ln -s /opt/src/whisper-manage.sh /usr/local/bin/whisper_manage
 
 EXPOSE 9000/tcp
 VOLUME ["/var/lib/whisper"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5m --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=1h --retries=3 \
     CMD curl -fsS http://127.0.0.1:9000/health || exit 1
-CMD ["/opt/src/run.sh"]
+CMD ["/opt/src/container-entrypoint.sh"]
 
 ARG BUILD_DATE
 ARG VERSION

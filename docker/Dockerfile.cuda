@@ -1,39 +1,41 @@
 FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
+ARG SHERPA_ONNX_VERSION=1.13.3
+ARG SHERPA_ONNX_CUDA_WHEEL=https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.3/sherpa_onnx-1.13.3%2Bcuda12.cudnn9-cp312-cp312-linux_x86_64.whl
+
 WORKDIR /opt/src
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/opt/src" \
     PATH="/opt/venv/bin:$PATH" \
     TMPDIR="/run/whisper-temp"
 
-# faster-whisper decodes audio via the PyAV library (bundled FFmpeg libraries).
-# curl is used by run.sh for the public-IP lookup and the health-check poll.
-COPY ./requirements.txt /opt/src/requirements.txt
+COPY requirements/cuda.txt /opt/src/requirements.txt
 
-RUN set -x \
+RUN set -eux \
+    && export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl bzip2 python3 python3-venv \
+    && apt-get install -y --no-install-recommends bzip2 curl libasound2t64 python3 python3-venv \
     && python3 -m venv /opt/venv \
     && pip install --no-cache-dir --requirement /opt/src/requirements.txt \
-    && apt-get autoremove -y \
+    && pip install --no-cache-dir "${SHERPA_ONNX_CUDA_WHEEL}" \
+    && python -c "import sherpa_onnx; assert '+cuda12.cudnn9' in sherpa_onnx.__version__, sherpa_onnx.__version__" \
     && rm -rf /var/lib/apt/lists/* \
-    && find /opt/venv -name '*.pyi' -delete \
-    && { find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true; } \
     && mkdir -p /var/lib/whisper
 
-COPY ./run.sh /opt/src/run.sh
-COPY ./manage.sh /opt/src/manage.sh
-COPY ./api_server.py /opt/src/api_server.py
-COPY ./diarizer.py /opt/src/diarizer.py
-RUN chmod 755 /opt/src/run.sh /opt/src/manage.sh \
-    && ln -s /opt/src/manage.sh /usr/local/bin/whisper_manage
+COPY scripts/container-entrypoint.sh /opt/src/container-entrypoint.sh
+COPY scripts/whisper-manage.sh /opt/src/whisper-manage.sh
+COPY src/whisper_not /opt/src/whisper_not
+
+RUN chmod 755 /opt/src/container-entrypoint.sh /opt/src/whisper-manage.sh \
+    && ln -s /opt/src/whisper-manage.sh /usr/local/bin/whisper_manage
 
 EXPOSE 9000/tcp
 VOLUME ["/var/lib/whisper"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10m --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=1h --retries=3 \
     CMD curl -fsS http://127.0.0.1:9000/health || exit 1
-CMD ["/opt/src/run.sh"]
+CMD ["/opt/src/container-entrypoint.sh"]
 
 ARG BUILD_DATE
 ARG VERSION
@@ -46,7 +48,7 @@ LABEL maintainer="ALIENvsROBOT <gowtham.sridher5@gmail.com>" \
     org.opencontainers.image.revision="$VCS_REF" \
     org.opencontainers.image.authors="ALIENvsROBOT <gowtham.sridher5@gmail.com>" \
     org.opencontainers.image.title="Whisper_not Speech-to-Text Server (CUDA)" \
-    org.opencontainers.image.description="CUDA-accelerated OpenAI-compatible faster-whisper server with opt-in word timestamps and speaker diarization." \
+    org.opencontainers.image.description="CUDA-accelerated OpenAI-compatible faster-whisper server with CUDA speaker diarization." \
     org.opencontainers.image.url="https://github.com/ALIENvsROBOT/Whisper_not" \
     org.opencontainers.image.source="https://github.com/ALIENvsROBOT/Whisper_not" \
     org.opencontainers.image.documentation="https://github.com/ALIENvsROBOT/Whisper_not"
