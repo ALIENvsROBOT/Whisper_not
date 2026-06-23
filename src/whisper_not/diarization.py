@@ -14,10 +14,7 @@ import tarfile
 
 import numpy as np
 
-try:
-    import sherpa_onnx
-except ModuleNotFoundError:
-    sherpa_onnx = None
+sherpa_onnx = None
 
 logger = logging.getLogger("whisper_server.diarizer")
 
@@ -43,6 +40,19 @@ _EMB_MODEL_REL = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 # ---------------------------------------------------------------------------
 
 _pipelines = {}
+
+
+def _get_sherpa_onnx():
+    global sherpa_onnx
+    if sherpa_onnx is None:
+        try:
+            import sherpa_onnx as runtime
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "sherpa-onnx is not installed in this runtime."
+            ) from exc
+        sherpa_onnx = runtime
+    return sherpa_onnx
 
 
 def resolve_provider(value: str = "auto", whisper_device: str = "cpu") -> str:
@@ -93,8 +103,7 @@ def load(
     num_threads: int = 2,
 ) -> object:
     """Return a cached diarization pipeline for the requested clustering options."""
-    if sherpa_onnx is None:
-        raise RuntimeError("sherpa-onnx is not installed in this runtime.")
+    runtime = _get_sherpa_onnx()
     cache_dir = os.path.abspath(cache_dir)
     key = (cache_dir, num_speakers, cluster_threshold, provider, num_threads)
     if key in _pipelines:
@@ -105,20 +114,20 @@ def load(
     # If the speaker count is unknown, use threshold-based auto clustering.
     num_clusters = num_speakers if num_speakers > 0 else -1
 
-    config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-            pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
+    config = runtime.OfflineSpeakerDiarizationConfig(
+        segmentation=runtime.OfflineSpeakerSegmentationModelConfig(
+            pyannote=runtime.OfflineSpeakerSegmentationPyannoteModelConfig(
                 model=seg_path,
             ),
             provider=provider,
             num_threads=num_threads,
         ),
-        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        embedding=runtime.SpeakerEmbeddingExtractorConfig(
             model=emb_path,
             provider=provider,
             num_threads=num_threads,
         ),
-        clustering=sherpa_onnx.FastClusteringConfig(
+        clustering=runtime.FastClusteringConfig(
             num_clusters=num_clusters,
             threshold=cluster_threshold,
         ),
@@ -131,7 +140,7 @@ def load(
             "Diarization config validation failed. Check that model files exist."
         )
 
-    pipeline = sherpa_onnx.OfflineSpeakerDiarization(config)
+    pipeline = runtime.OfflineSpeakerDiarization(config)
     _pipelines[key] = pipeline
     logger.info(
         "Diarization pipeline ready (provider=%s, sample_rate=%d, num_clusters=%d, threshold=%.2f)",

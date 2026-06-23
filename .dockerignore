@@ -1,6 +1,9 @@
 .git
 .github
 .gitignore
+.env
+*.env
+!*.env.example
 README*.md
 docs/
 notebooks/

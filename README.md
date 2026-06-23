@@ -247,9 +247,13 @@ in the container’s temporary filesystem while the request is processed.
 | `WHISPER_DIARIZATION` | `on_demand` | `on_demand`, `always`, or `disabled` |
 | `WHISPER_DIARIZATION_DEVICE` | `auto` | `auto`, `cuda`, or `cpu`; auto follows the Whisper device |
 | `WHISPER_DIARIZATION_THREADS` | `2` | ONNX Runtime threads for diarization |
+| `WHISPER_DIARIZATION_TIMEOUT_SECONDS` | `7200` | Maximum duration of one isolated diarization operation |
 | `WHISPER_WORD_TIMESTAMPS` | `false` | Global word timestamps; per-request is recommended |
 | `WHISPER_API_KEY` | Generated for new persistent volumes | Bearer-token authentication |
 | `HF_TOKEN` | Empty | Hugging Face token for gated/private models |
+| `WHISPER_MAX_UPLOAD_MB` | `1024` | Maximum uploaded audio size; `0` disables the limit |
+| `WHISPER_MAX_QUEUED_REQUESTS` | `15` | Requests allowed to wait behind the single active transcription |
+| `WHISPER_QUEUE_TIMEOUT_SECONDS` | `7200` | Maximum time a queued request may wait |
 | `WHISPER_STARTUP_TIMEOUT` | `3600` | Seconds allowed for initial model download and loading |
 
 ## Container images and versions
@@ -282,6 +286,12 @@ and `cuda-1.2`.
 - Set an exact `num_speakers` when known for more reliable clustering.
 - A single process intentionally serializes CTranslate2 inference to avoid
   unsafe concurrent access and unpredictable GPU memory spikes.
+- Blocking transcription runs in a worker thread and diarization runs in an
+  isolated process, so health checks and lightweight API handling remain
+  responsive during long recordings.
+- Admission control accepts one active audio request and up to 15 waiting
+  requests by default. Additional requests receive HTTP 429 before upload
+  bodies are consumed.
 
 The CUDA image installs the official sherpa-onnx CUDA 12/cuDNN 9 wheel.
 Diarization segmentation and speaker-embedding inference use CUDA when

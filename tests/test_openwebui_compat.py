@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -91,17 +92,19 @@ class OpenWebUICompatibilityTests(unittest.TestCase):
     def test_direct_diarization_request_runs_local_diarizer(self):
         call_order = []
         fake_diarizer = SimpleNamespace(
-            load=lambda *args, **kwargs: call_order.append("diarizer_load"),
-            diarize=lambda *args, **kwargs: (
-                call_order.append("diarize")
-                or [(0.0, 1.0, "SPEAKER_00")]
-            ),
             assign_speakers=lambda segments, turns: [
                 segment.update({"speaker": "SPEAKER_00"}) or segment
                 for segment in segments
             ],
         )
         fake_diarizer.resolve_provider = lambda *args, **kwargs: "cpu"
+        fake_worker = SimpleNamespace(
+            load=lambda **kwargs: call_order.append("diarizer_load"),
+            diarize=lambda *args, **kwargs: (
+                call_order.append("diarize")
+                or [(0.0, 1.0, "SPEAKER_00")]
+            ),
+        )
         api_server.diarization = fake_diarizer
         original_transcribe = self.model.transcribe
 
@@ -111,15 +114,16 @@ class OpenWebUICompatibilityTests(unittest.TestCase):
 
         self.model.transcribe = record_transcribe
 
-        response = self.client.post(
-            "/v1/audio/transcriptions",
-            data={
-                "model": "gpt-4o-transcribe-diarize",
-                "response_format": "diarized_json",
-                "download": "true",
-            },
-            files={"file": ("meeting.wav", b"audio", "audio/wav")},
-        )
+        with patch.object(api_server, "_diarization_process", fake_worker):
+            response = self.client.post(
+                "/v1/audio/transcriptions",
+                data={
+                    "model": "gpt-4o-transcribe-diarize",
+                    "response_format": "diarized_json",
+                    "download": "true",
+                },
+                files={"file": ("meeting.wav", b"audio", "audio/wav")},
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["segments"][0]["speaker"], "A")

@@ -208,5 +208,6 @@ The startup model is always the model that performs inference.
 - `400`: invalid or unsupported request combination.
 - `401`: missing or invalid bearer token.
 - `413`: upload exceeds `WHISPER_MAX_UPLOAD_MB`.
+- `429`: the bounded transcription queue is full or the queue wait timed out.
 - `500`: transcription or diarization execution failed.
 - `503`: startup model is not ready.

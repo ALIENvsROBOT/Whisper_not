@@ -8,6 +8,7 @@ Project: https://github.com/ALIENvsROBOT/Whisper_not
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -24,6 +25,12 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from whisper_not import diarization
+from whisper_not.concurrency import (
+    AudioAdmissionMiddleware,
+    AudioRequestLimiter,
+    RequestQueueFull,
+)
+from whisper_not.diarization_process import DiarizationProcess
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -54,7 +61,6 @@ _VALID_RESPONSE_FORMATS = {"json", "text", "verbose_json", "srt", "vtt", "diariz
 # Serialise all inference calls (batch and streaming) so that CTranslate2 is
 # never called concurrently from multiple threads.
 _inference_lock = threading.Lock()
-_diarization_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -286,6 +292,141 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _positive_env_int(name: str, default: int, *, allow_zero: bool = False) -> int:
+    value = _env_int(name, default)
+    minimum = 0 if allow_zero else 1
+    if value < minimum:
+        logger.error(
+            "Invalid value for %s: %d (expected %d or greater); using default %d",
+            name,
+            value,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
+def _positive_env_float(name: str, default: float) -> float:
+    value = _env_float(name, default)
+    if value <= 0:
+        logger.error(
+            "Invalid value for %s: %s (expected greater than zero); using default %s",
+            name,
+            value,
+            default,
+        )
+        return default
+    return value
+
+
+def _authorization_error(authorization: Optional[str]) -> Optional[str]:
+    required = os.environ.get("WHISPER_API_KEY", "").strip()
+    if not required:
+        return None
+    if not authorization:
+        return "Missing Authorization header."
+    parts = authorization.split(maxsplit=1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return "Invalid Authorization header. Expected: Bearer <key>"
+    if not hmac.compare_digest(parts[1], required):
+        return "Invalid API key."
+    return None
+
+
+def _validate_temperature(temperature: float) -> None:
+    if not 0.0 <= temperature <= 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="temperature must be between 0 and 1.",
+        )
+
+
+def _run_transcription_sync(
+    tmp_path: str,
+    lang: Optional[str],
+    prompt: Optional[str],
+    temperature: float,
+    task: str,
+    word_timestamps: bool,
+):
+    with _inference_lock:
+        segments_gen, info = _model.transcribe(
+            tmp_path,
+            language=lang,
+            task=task,
+            initial_prompt=prompt or None,
+            temperature=temperature,
+            beam_size=_beam_size,
+            word_timestamps=word_timestamps,
+            vad_filter=True,
+        )
+        return list(segments_gen), info
+
+
+async def _run_transcription(
+    tmp_path: str,
+    lang: Optional[str],
+    prompt: Optional[str],
+    temperature: float,
+    task: str,
+    word_timestamps: bool,
+):
+    return await asyncio.to_thread(
+        _run_transcription_sync,
+        tmp_path,
+        lang,
+        prompt,
+        temperature,
+        task,
+        word_timestamps,
+    )
+
+
+def _load_diarization_sync(
+    *,
+    cache_dir: str,
+    num_speakers: int,
+    cluster_threshold: float,
+    provider: str,
+    num_threads: int,
+) -> None:
+    _diarization_process.load(
+        cache_dir=cache_dir,
+        num_speakers=num_speakers,
+        cluster_threshold=cluster_threshold,
+        provider=provider,
+        num_threads=num_threads,
+    )
+
+
+def _run_diarization_sync(
+    tmp_path: str,
+    *,
+    cache_dir: str,
+    num_speakers: int,
+    cluster_threshold: float,
+    provider: str,
+    num_threads: int,
+):
+    return _diarization_process.diarize(
+        tmp_path,
+        cache_dir=cache_dir,
+        num_speakers=num_speakers,
+        cluster_threshold=cluster_threshold,
+        provider=provider,
+        num_threads=num_threads,
+    )
+
+
+_diarization_process = DiarizationProcess(
+    request_timeout=_positive_env_float(
+        "WHISPER_DIARIZATION_TIMEOUT_SECONDS",
+        7200.0,
+    )
+)
+
+
 def _load_model() -> None:
     """Import and initialise the faster-whisper model from environment config."""
     global _model, _model_name, _beam_size, _word_timestamps, _max_upload_bytes
@@ -329,7 +470,10 @@ def _load_model() -> None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _load_model()
-    yield
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(_diarization_process.close)
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +489,23 @@ app = FastAPI(
     version="1.0.0",
     lifespan=_lifespan,
 )
+_request_limiter = AudioRequestLimiter(
+    max_active=1,
+    max_queued=_positive_env_int(
+        "WHISPER_MAX_QUEUED_REQUESTS",
+        15,
+        allow_zero=True,
+    ),
+    wait_timeout=_positive_env_float(
+        "WHISPER_QUEUE_TIMEOUT_SECONDS",
+        7200.0,
+    ),
+)
+app.add_middleware(
+    AudioAdmissionMiddleware,
+    limiter=_request_limiter,
+    authorize=_authorization_error,
+)
 
 # ---------------------------------------------------------------------------
 # Auth dependency
@@ -356,19 +517,9 @@ def _verify_api_key(authorization: Optional[str] = Header(default=None)) -> None
     If WHISPER_API_KEY is set, require a matching Bearer token.
     If the env var is empty or unset the endpoint is open (no auth).
     """
-    required = os.environ.get("WHISPER_API_KEY", "").strip()
-    if not required:
-        return
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header.")
-    parts = authorization.split(maxsplit=1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Authorization header. Expected: Bearer <key>",
-        )
-    if parts[1] != required:
-        raise HTTPException(status_code=401, detail="Invalid API key.")
+    error = _authorization_error(authorization)
+    if error is not None:
+        raise HTTPException(status_code=401, detail=error)
 
 
 def _merge_form_lists(*values: Optional[List[str]]) -> Optional[List[str]]:
@@ -609,9 +760,11 @@ async def _handle_audio(
                    "Use a multilingual model (e.g. base, small, large-v3-turbo).",
         )
 
-    # Normalise the stream form field: the string "true" (case-insensitive) enables streaming.
+    _validate_temperature(temperature)
+
+    # Normalise the stream form field using the same strict parser as other booleans.
     # Using Optional[str] instead of bool avoids Pydantic version-dependent coercion differences.
-    stream_flag: bool = stream is not None and stream.strip().lower() == "true"
+    stream_flag = _parse_bool(stream, "stream")
     options = _resolve_request_options(
         model=model,
         response_format=response_format,
@@ -705,24 +858,24 @@ async def _handle_audio(
         diarization_threads = None
         if options.diarize:
             try:
-                with _diarization_lock:
-                    diarization_provider = diarization.resolve_provider(
-                        os.environ.get("WHISPER_DIARIZATION_DEVICE", "auto"),
-                        whisper_device=os.environ.get("WHISPER_DEVICE", "cpu"),
-                    )
-                    diarization_threads = _env_int(
-                        "WHISPER_DIARIZATION_THREADS",
-                        2,
-                    )
-                    # The CUDA sherpa-onnx pipeline must be initialized before
-                    # CTranslate2 processes audio in the same process.
-                    diarization.load(
-                        cache_dir=os.environ.get("HF_HOME", "/var/lib/whisper"),
-                        num_speakers=options.num_speakers,
-                        cluster_threshold=options.diarize_threshold,
-                        provider=diarization_provider,
-                        num_threads=diarization_threads,
-                    )
+                diarization_provider = diarization.resolve_provider(
+                    os.environ.get("WHISPER_DIARIZATION_DEVICE", "auto"),
+                    whisper_device=os.environ.get("WHISPER_DEVICE", "cpu"),
+                )
+                diarization_threads = _env_int(
+                    "WHISPER_DIARIZATION_THREADS",
+                    2,
+                )
+                # The CUDA sherpa-onnx pipeline must be initialized before
+                # CTranslate2 processes audio in the same process.
+                await asyncio.to_thread(
+                    _load_diarization_sync,
+                    cache_dir=os.environ.get("HF_HOME", "/var/lib/whisper"),
+                    num_speakers=options.num_speakers,
+                    cluster_threshold=options.diarize_threshold,
+                    provider=diarization_provider,
+                    num_threads=diarization_threads,
+                )
             except Exception as exc:
                 logger.exception("Diarization initialization failed: %s", exc)
                 raise HTTPException(
@@ -731,18 +884,14 @@ async def _handle_audio(
                 ) from exc
 
         try:
-            with _inference_lock:
-                segments_gen, info = _model.transcribe(
-                    tmp_path,
-                    language=lang,
-                    task=task,
-                    initial_prompt=prompt or None,
-                    temperature=temperature,
-                    beam_size=_beam_size,
-                    word_timestamps=wt_flag,
-                    vad_filter=True,
-                )
-                segments = list(segments_gen)  # consume the generator before the temp file is removed
+            segments, info = await _run_transcription(
+                tmp_path,
+                lang,
+                prompt,
+                temperature,
+                task,
+                wt_flag,
+            )
 
         except HTTPException:
             raise
@@ -756,15 +905,15 @@ async def _handle_audio(
         speaker_map = None  # {segment_index: speaker_label}
         if options.diarize:
             try:
-                with _diarization_lock:
-                    turns = diarization.diarize(
-                        tmp_path,
-                        cache_dir=os.environ.get("HF_HOME", "/var/lib/whisper"),
-                        num_speakers=options.num_speakers,
-                        cluster_threshold=options.diarize_threshold,
-                        provider=diarization_provider,
-                        num_threads=diarization_threads,
-                    )
+                turns = await asyncio.to_thread(
+                    _run_diarization_sync,
+                    tmp_path,
+                    cache_dir=os.environ.get("HF_HOME", "/var/lib/whisper"),
+                    num_speakers=options.num_speakers,
+                    cluster_threshold=options.diarize_threshold,
+                    provider=diarization_provider,
+                    num_threads=diarization_threads,
+                )
                 # Build lightweight segment dicts for alignment
                 seg_dicts = [
                     {"start": seg.start, "end": seg.end, "text": seg.text.strip()}

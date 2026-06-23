@@ -90,7 +90,7 @@ faster-whisper transcription under inference lock
   |
   +--> optional word timestamp generation
   |
-  +--> optional sherpa-onnx diarization under diarization lock
+  +--> optional sherpa-onnx diarization in isolated worker process
   |
   v
 Response serializer
@@ -119,9 +119,9 @@ Diarization:
 
 Speaker clustering is not capped at two speakers. A positive
 `num_speakers` sets an exact cluster count; `-1` enables threshold-based
-automatic detection. CUDA diarization pipelines are initialized before
-CTranslate2 processes a diarized request because initializing sherpa-onnx
-after CUDA transcription can fail inside the native runtime.
+automatic detection. CUDA diarization is isolated from CTranslate2 because
+initializing both native CUDA runtimes in one process can terminate that
+process after an earlier transcription.
 
 Language:
 
@@ -134,8 +134,22 @@ Language:
 CTranslate2 inference is serialized through `_inference_lock`. This avoids
 unsafe concurrent calls and large, unpredictable GPU memory spikes.
 
-Diarization is serialized independently through `_diarization_lock`.
-Transcription and diarization model objects remain loaded and reusable.
+Diarization runs in one lazy, persistent spawned process. This isolates
+sherpa-onnx/ONNX Runtime CUDA state from CTranslate2 CUDA state and prevents a
+native diarization failure from terminating the API/model process. The worker
+caches its model pipelines until container shutdown and restarts after an
+unexpected exit.
+
+Blocking Whisper calls and diarization IPC execute through `asyncio.to_thread()`.
+The event loop therefore remains available for health checks, authentication,
+request validation, and other lightweight work during long inference jobs.
+
+An ASGI admission middleware runs before multipart parsing. One audio request
+is active at a time, and `WHISPER_MAX_QUEUED_REQUESTS` bounds callers waiting
+behind it. Requests beyond that bound receive HTTP 429 before their upload is
+read. `WHISPER_QUEUE_TIMEOUT_SECONDS` prevents abandoned callers from waiting
+indefinitely. The admission slot is held until normal or streaming responses
+finish, so transcription remains strictly serial.
 
 For higher throughput, deploy multiple replicas and route requests across
 them. Each replica needs enough GPU memory for its own Whisper model.
