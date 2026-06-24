@@ -11,6 +11,7 @@ import logging
 import os
 import subprocess
 import tarfile
+import time
 
 import numpy as np
 
@@ -67,6 +68,50 @@ def resolve_provider(value: str = "auto", whisper_device: str = "cpu") -> str:
     return requested
 
 
+def _nvidia_smi_available() -> bool:
+    try:
+        subprocess.run(
+            ["nvidia-smi"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
+def _cuda_provider_available(runtime) -> bool:
+    """Return True when the sherpa runtime can execute diarization on CUDA."""
+    provider_names = None
+    if callable(getattr(runtime, "get_available_providers", None)):
+        provider_names = runtime.get_available_providers()
+
+    if provider_names is not None:
+        providers = {str(provider).lower() for provider in provider_names}
+        if "cudaexecutionprovider" in providers or "cuda" in providers:
+            return True
+
+    # The CUDA sherpa-onnx wheel bundles its own CUDA runtime path; the separate
+    # onnxruntime package installed for faster-whisper may still report CPU-only.
+    runtime_version = str(getattr(runtime, "__version__", "")).lower()
+    if "+cuda" in runtime_version:
+        return _nvidia_smi_available()
+
+    if provider_names is None:
+        try:
+            import onnxruntime as ort
+        except ModuleNotFoundError:
+            return False
+        else:
+            provider_names = ort.get_available_providers()
+            return "cudaexecutionprovider" in {
+                str(provider).lower() for provider in provider_names
+            }
+
+    return False
+
+
 def _download_file(url: str, dest: str) -> None:
     """Download a file using curl (available in the container)."""
     logger.info("Downloading %s -> %s", url, dest)
@@ -104,6 +149,12 @@ def load(
 ) -> object:
     """Return a cached diarization pipeline for the requested clustering options."""
     runtime = _get_sherpa_onnx()
+    if provider == "cuda" and not _cuda_provider_available(runtime):
+        raise RuntimeError(
+            "WHISPER_DIARIZATION_DEVICE resolved to cuda, but CUDA execution "
+            "is not available to sherpa-onnx in this container."
+        )
+
     cache_dir = os.path.abspath(cache_dir)
     key = (cache_dir, num_speakers, cluster_threshold, provider, num_threads)
     if key in _pipelines:
@@ -202,6 +253,7 @@ def diarize(
 
     Returns a list of (start, end, speaker_label) tuples sorted by start time.
     """
+    t0 = time.monotonic()
     pipeline = load(
         cache_dir=cache_dir,
         num_speakers=num_speakers,
@@ -209,13 +261,26 @@ def diarize(
         provider=provider,
         num_threads=num_threads,
     )
+    t_loaded = time.monotonic()
 
     audio = _load_audio(audio_path, target_sr=pipeline.sample_rate)
+    t_decoded = time.monotonic()
 
     result = pipeline.process(audio).sort_by_start_time()
+    t_processed = time.monotonic()
     turns = []
     for r in result:
         turns.append((r.start, r.end, f"SPEAKER_{r.speaker:02d}"))
+    logger.info(
+        "Diarization timings | provider=%s threads=%d load=%.2fs decode=%.2fs process=%.2fs turns=%d total=%.2fs",
+        provider,
+        num_threads,
+        t_loaded - t0,
+        t_decoded - t_loaded,
+        t_processed - t_decoded,
+        len(turns),
+        time.monotonic() - t0,
+    )
     return turns
 
 
@@ -236,14 +301,24 @@ def assign_speakers(segments, diarization_turns):
             seg["speaker"] = "SPEAKER_00"
         return segments
 
+    turn_index = 0
+    turn_count = len(diarization_turns)
+
     for seg in segments:
         seg_start = seg["start"]
         seg_end = seg["end"]
         best_speaker = "SPEAKER_00"
         best_overlap = 0.0
 
-        for turn_start, turn_end, speaker in diarization_turns:
-            # Calculate overlap
+        while turn_index < turn_count and diarization_turns[turn_index][1] <= seg_start:
+            turn_index += 1
+
+        scan_index = turn_index
+        while scan_index < turn_count:
+            turn_start, turn_end, speaker = diarization_turns[scan_index]
+            if turn_start >= seg_end:
+                break
+
             overlap_start = max(seg_start, turn_start)
             overlap_end = min(seg_end, turn_end)
             overlap = max(0.0, overlap_end - overlap_start)
@@ -251,6 +326,7 @@ def assign_speakers(segments, diarization_turns):
             if overlap > best_overlap:
                 best_overlap = overlap
                 best_speaker = speaker
+            scan_index += 1
 
         seg["speaker"] = best_speaker
 

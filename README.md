@@ -246,7 +246,7 @@ in the container’s temporary filesystem while the request is processed.
 | `WHISPER_THREADS` | `2` | CPU inference threads |
 | `WHISPER_DIARIZATION` | `on_demand` | `on_demand`, `always`, or `disabled` |
 | `WHISPER_DIARIZATION_DEVICE` | `auto` | `auto`, `cuda`, or `cpu`; auto follows the Whisper device |
-| `WHISPER_DIARIZATION_THREADS` | `2` | ONNX Runtime threads for diarization |
+| `WHISPER_DIARIZATION_THREADS` | Same as `WHISPER_THREADS` | ONNX Runtime threads for diarization |
 | `WHISPER_DIARIZATION_TIMEOUT_SECONDS` | `7200` | Maximum duration of one isolated diarization operation |
 | `WHISPER_WORD_TIMESTAMPS` | `false` | Global word timestamps; per-request is recommended |
 | `WHISPER_API_KEY` | Generated for new persistent volumes | Bearer-token authentication |
