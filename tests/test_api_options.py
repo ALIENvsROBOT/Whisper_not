@@ -1,4 +1,7 @@
+import os
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -116,6 +119,70 @@ class ResolveRequestOptionsTests(unittest.TestCase):
             )
 
         self.assertEqual(error.exception.status_code, 400)
+
+
+class TranscriptionOptionTests(unittest.TestCase):
+    def test_transcription_uses_long_audio_anti_loop_defaults(self):
+        calls = []
+
+        class Model:
+            def transcribe(self, *args, **kwargs):
+                calls.append(kwargs)
+                segment = SimpleNamespace(text="Hello.")
+                info = SimpleNamespace(language="en")
+                return iter([segment]), info
+
+        original_model = api_server._model
+        api_server._model = Model()
+        try:
+            with patch.dict(os.environ, {}, clear=True):
+                segments, _ = api_server._run_transcription_sync(
+                    "meeting.mp3",
+                    None,
+                    None,
+                    0.0,
+                    "transcribe",
+                    False,
+                )
+        finally:
+            api_server._model = original_model
+
+        self.assertEqual([segment.text for segment in segments], ["Hello."])
+        self.assertFalse(calls[0]["condition_on_previous_text"])
+        self.assertEqual(calls[0]["vad_parameters"]["min_silence_duration_ms"], 500)
+
+    def test_transcription_env_can_restore_previous_text_conditioning(self):
+        calls = []
+
+        class Model:
+            def transcribe(self, *args, **kwargs):
+                calls.append(kwargs)
+                return iter([]), SimpleNamespace(language="en")
+
+        original_model = api_server._model
+        api_server._model = Model()
+        try:
+            with patch.dict(
+                os.environ,
+                {
+                    "WHISPER_CONDITION_ON_PREVIOUS_TEXT": "true",
+                    "WHISPER_VAD_MIN_SILENCE_MS": "2000",
+                },
+                clear=True,
+            ):
+                api_server._run_transcription_sync(
+                    "meeting.mp3",
+                    None,
+                    None,
+                    0.0,
+                    "transcribe",
+                    False,
+                )
+        finally:
+            api_server._model = original_model
+
+        self.assertTrue(calls[0]["condition_on_previous_text"])
+        self.assertEqual(calls[0]["vad_parameters"]["min_silence_duration_ms"], 2000)
 
 
 if __name__ == "__main__":

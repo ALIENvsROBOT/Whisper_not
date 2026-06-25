@@ -45,7 +45,7 @@ docker run -d `
   -v whisper-not-data:/var/lib/whisper `
   -e WHISPER_API_KEY="replace-with-a-long-secret" `
   -e HF_TOKEN="hf_replace_with_your_token" `
-  -e WHISPER_MODEL="TheChola/whisper-large-v3-turbo-german-faster-whisper" `
+  -e WHISPER_MODEL="large-v3-turbo" `
   -e WHISPER_LANGUAGE="auto" `
   -e WHISPER_DEVICE="cuda" `
   -e WHISPER_COMPUTE_TYPE="float16" `

@@ -54,6 +54,7 @@ _beam_size = 5      # beam size used for transcription
 _word_timestamps = False  # default for word-level timestamps
 _diarization_mode = os.environ.get("WHISPER_DIARIZATION", "on_demand").strip().lower()
 _max_upload_bytes = 1024 * 1024 * 1024  # 1 GiB by default; 0 disables the limit
+_DEFAULT_VAD_MIN_SILENCE_MS = 500
 _UPLOAD_CHUNK_SIZE = 1024 * 1024
 _UNSUPPORTED_DIARIZE_MODEL = "gpt-4o-transcribe-diarize"
 _VALID_RESPONSE_FORMATS = {"json", "text", "verbose_json", "srt", "vtt", "diarized_json"}
@@ -292,6 +293,23 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name, "").strip().lower()
+    if not val:
+        return default
+    if val in {"1", "true", "yes", "on"}:
+        return True
+    if val in {"0", "false", "no", "off"}:
+        return False
+    logger.error(
+        "Invalid value for %s: %r (expected true or false); using default %s",
+        name,
+        val,
+        default,
+    )
+    return default
+
+
 def _positive_env_int(name: str, default: int, *, allow_zero: bool = False) -> int:
     value = _env_int(name, default)
     minimum = 0 if allow_zero else 1
@@ -318,6 +336,25 @@ def _positive_env_float(name: str, default: float) -> float:
         )
         return default
     return value
+
+
+def _transcription_options(word_timestamps: bool) -> dict:
+    vad_min_silence_ms = _positive_env_int(
+        "WHISPER_VAD_MIN_SILENCE_MS",
+        _DEFAULT_VAD_MIN_SILENCE_MS,
+    )
+    return {
+        "beam_size": _beam_size,
+        "word_timestamps": word_timestamps,
+        "vad_filter": True,
+        "vad_parameters": {
+            "min_silence_duration_ms": vad_min_silence_ms,
+        },
+        "condition_on_previous_text": _env_bool(
+            "WHISPER_CONDITION_ON_PREVIOUS_TEXT",
+            False,
+        ),
+    }
 
 
 def _authorization_error(authorization: Optional[str]) -> Optional[str]:
@@ -357,9 +394,7 @@ def _run_transcription_sync(
             task=task,
             initial_prompt=prompt or None,
             temperature=temperature,
-            beam_size=_beam_size,
-            word_timestamps=word_timestamps,
-            vad_filter=True,
+            **_transcription_options(word_timestamps),
         )
         return list(segments_gen), info
 
@@ -646,8 +681,7 @@ async def _stream_sse(
                     task=task,
                     initial_prompt=prompt or None,
                     temperature=temperature,
-                    beam_size=_beam_size,
-                    vad_filter=True,
+                    **_transcription_options(False),
                 )
                 for seg in segs_gen:
                     loop.call_soon_threadsafe(seg_queue.put_nowait, seg)

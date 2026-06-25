@@ -54,7 +54,7 @@ fine-grained token that can read the package.
 Open:
 
 ```text
-https://huggingface.co/TheChola/whisper-large-v3-turbo-german-faster-whisper
+large-v3-turbo
 ```
 
 Accept the repository conditions and create a Hugging Face read token.
@@ -71,12 +71,14 @@ Contents:
 ```env
 WHISPER_API_KEY=replace-with-a-long-random-secret
 HF_TOKEN=hf_replace_with_your_read_token
-WHISPER_MODEL=TheChola/whisper-large-v3-turbo-german-faster-whisper
+WHISPER_MODEL=large-v3-turbo
 WHISPER_LANGUAGE=auto
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
 WHISPER_THREADS=4
 WHISPER_BEAM=5
+WHISPER_CONDITION_ON_PREVIOUS_TEXT=false
+WHISPER_VAD_MIN_SILENCE_MS=500
 WHISPER_DIARIZATION=on_demand
 WHISPER_DIARIZATION_DEVICE=auto
 WHISPER_DIARIZATION_THREADS=4

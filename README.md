@@ -37,19 +37,19 @@ Optional direct API requests can enable:
 The default GPU stack uses:
 
 ```text
-TheChola/whisper-large-v3-turbo-german-faster-whisper
+large-v3-turbo
 ```
 
-It is a CTranslate2 model and loads directly through faster-whisper. The model
-is optimized primarily for German but retains multilingual Whisper support.
+It is the multilingual large-v3 turbo model supported directly by
+faster-whisper. It is the best default when the service may receive German,
+English, or other languages.
 
 Important:
 
-- Accept the model conditions on its
-  [Hugging Face page](https://huggingface.co/TheChola/whisper-large-v3-turbo-german-faster-whisper).
-- Add a Hugging Face read token as `HF_TOKEN`.
-- The model is licensed CC BY-NC 4.0. Confirm that this is compatible with
-  your use.
+- Use `WHISPER_LANGUAGE=auto` for mixed-language uploads.
+- Set `WHISPER_LANGUAGE=de` only if all production audio is German and you want
+  to skip language detection.
+- A Hugging Face token is only needed for private or gated Hugging Face models.
 
 Any compatible faster-whisper built-in model, Hugging Face CTranslate2
 repository ID, or mounted local model path can be supplied through
@@ -58,7 +58,7 @@ repository ID, or mounted local model path can be supplied through
 Set it through Compose/Portainer, `--env-file .env`, or directly:
 
 ```bash
--e WHISPER_MODEL="TheChola/whisper-large-v3-turbo-german-faster-whisper"
+-e WHISPER_MODEL="large-v3-turbo"
 ```
 
 ## Portainer GPU stack
@@ -75,7 +75,7 @@ Set these Portainer environment variables:
 |---|---:|---|
 | `WHISPER_API_KEY` | Yes | A long random secret |
 | `HF_TOKEN` | For gated models | Hugging Face read token |
-| `WHISPER_MODEL` | No | `TheChola/whisper-large-v3-turbo-german-faster-whisper` |
+| `WHISPER_MODEL` | No | `large-v3-turbo` |
 | `WHISPER_HOST_PORT` | No | `9000` |
 | `WHISPER_THREADS` | No | `4` |
 | `WHISPER_COMPUTE_TYPE` | No | `float16` |
@@ -243,6 +243,8 @@ in the container’s temporary filesystem while the request is processed.
 | `WHISPER_DEVICE` | `cpu` | `cpu`, `cuda`, or `auto` |
 | `WHISPER_COMPUTE_TYPE` | CPU `int8`, CUDA `float16` | CTranslate2 compute type |
 | `WHISPER_BEAM` | `5` | Decoding beam size |
+| `WHISPER_CONDITION_ON_PREVIOUS_TEXT` | `false` | Disable prior-window conditioning to reduce long-audio repetition loops |
+| `WHISPER_VAD_MIN_SILENCE_MS` | `500` | VAD silence threshold passed to faster-whisper |
 | `WHISPER_THREADS` | `2` | CPU inference threads |
 | `WHISPER_DIARIZATION` | `on_demand` | `on_demand`, `always`, or `disabled` |
 | `WHISPER_DIARIZATION_DEVICE` | `auto` | `auto`, `cuda`, or `cpu`; auto follows the Whisper device |
